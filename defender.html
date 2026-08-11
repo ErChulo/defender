@@ -52,11 +52,14 @@ window.addEventListener('resize', resize);
 // --------------------------- Constants (feel) ----------------------------
 const TAU = Math.PI * 2;
 const WORLD_W = 3600;
-const CRUISE = 286;          // horizontal cruise speed
-const REV_ACCEL = 3.0;       // reverse: decelerate then accelerate (floaty, authentic)
-const V_ACCEL = 1900;
-const V_MAX = 440;
-const V_DAMP = 5.5;
+const CRUISE = 286;          // retained for hyperspace/legacy tuning
+const H_ACCEL = 1850;         // direct horizontal thrust acceleration
+const H_MAX = 560;
+const H_DAMP = 4.2;
+const REV_ACCEL = 3.0;       // retained for the optional reverse helper
+const V_ACCEL = 2100;         // direct vertical thrust acceleration
+const V_MAX = 560;
+const V_DAMP = 4.8;
 const LASER_SPEED = 860;
 const LASER_RATE = 0.095;
 const SHIP_R = 14;
@@ -91,11 +94,15 @@ const Sound = (() => {
     if (ac) return;
     try {
       ac = new (window.AudioContext || window.webkitAudioContext)();
-      master = ac.createGain(); master.gain.value = MASTER_LEVEL;
+      master = ac.createGain(); master.gain.value = enabled ? MASTER_LEVEL : 0;
+      const lowShelf = ac.createBiquadFilter(); lowShelf.type = 'lowshelf';
+      lowShelf.frequency.value = 130; lowShelf.gain.value = 8.5;
+      const airShelf = ac.createBiquadFilter(); airShelf.type = 'highshelf';
+      airShelf.frequency.value = 4200; airShelf.gain.value = 2.5;
       compressor = ac.createDynamicsCompressor();
       compressor.threshold.value = -24; compressor.knee.value = 18;
       compressor.ratio.value = 8; compressor.attack.value = 0.003; compressor.release.value = 0.16;
-      master.connect(compressor).connect(ac.destination);
+      master.connect(lowShelf).connect(airShelf).connect(compressor).connect(ac.destination);
       const len = Math.floor(ac.sampleRate * 1.6);
       noiseBuf = ac.createBuffer(1, len, ac.sampleRate);
       const d = noiseBuf.getChannelData(0);
@@ -134,6 +141,11 @@ const Sound = (() => {
     tone(freq, dur, 'sine', vol, slideTo, delay);
     tone(freq * 2.01, dur * 0.78, 'triangle', vol * 0.34, slideTo ? slideTo * 1.8 : null, (delay || 0) + 0.004, -7);
   }
+  function sub(freq, dur, vol, slideTo, delay) {
+    // Separate infrabass layer: the compressor keeps it punchy without clipping.
+    tone(freq, dur, 'sine', vol, slideTo, delay);
+    tone(freq * 1.49, dur * 0.72, 'sine', vol * 0.22, slideTo ? slideTo * 1.49 : null, (delay || 0) + 0.006, 4);
+  }
   return {
     init, resume,
     setEnabled(v){ enabled = v; if (master) master.gain.value = v ? MASTER_LEVEL : 0; },
@@ -150,20 +162,24 @@ const Sound = (() => {
       noise(0.10, 0.075, 1900, 180, 0, 120, true);
     },
     explosion(big){
-      const d = big ? 0.92 : 0.58;
-      noise(d, big ? 0.70 : 0.50, 9800, 65, 0, 28);
-      noise(big ? 0.55 : 0.34, big ? 0.32 : 0.23, 2600, 90, 0.012, 160, true);
-      bass(big ? 67 : 104, big ? 0.82 : 0.48, big ? 0.38 : 0.28, big ? 24 : 38);
-      tone(big ? 180 : 235, big ? 0.48 : 0.26, 'sawtooth', 0.15, big ? 42 : 58, 0.006, -5);
-      tone(big ? 980 : 1260, 0.16, 'square', 0.095, 180, 0.008);
+      const d = big ? 1.08 : 0.68;
+      // Impact stack: infrabass thump, bass body, mid crack, high debris.
+      sub(big ? 32 : 43, big ? 1.16 : 0.76, big ? 0.68 : 0.46, big ? 17 : 24);
+      bass(big ? 58 : 86, big ? 0.92 : 0.58, big ? 0.46 : 0.34, big ? 23 : 35);
+      tone(big ? 132 : 188, big ? 0.62 : 0.36, 'sawtooth', big ? 0.20 : 0.14, big ? 36 : 52, 0.006, -5);
+      noise(d, big ? 0.76 : 0.56, 10500, 46, 0, 24);
+      noise(big ? 0.62 : 0.40, big ? 0.34 : 0.25, 3000, 100, 0.012, 150, true);
+      tone(big ? 860 : 1180, 0.18, 'square', 0.11, 150, 0.008);
+      tone(big ? 2400 : 3000, 0.07, 'sawtooth', 0.055, 700, 0.016);
     },
     smartBomb(){
-      noise(1.15, 0.74, 12000, 42, 0, 24);
-      noise(0.80, 0.32, 3200, 75, 0.01, 80, true);
-      bass(62, 1.02, 0.46, 22);
-      tone(150, 0.90, 'sawtooth', 0.15, 34, 0.015);
-      tone(620, 0.72, 'square', 0.11, 80, 0.03);
-      tone(1240, 0.42, 'triangle', 0.08, 110, 0.08);
+      sub(28, 1.28, 0.78, 16);
+      bass(54, 1.10, 0.52, 20);
+      tone(118, 0.96, 'sawtooth', 0.19, 28, 0.015);
+      noise(1.22, 0.78, 13000, 38, 0, 22);
+      noise(0.86, 0.36, 3600, 72, 0.01, 80, true);
+      tone(620, 0.72, 'square', 0.12, 80, 0.03);
+      tone(1400, 0.44, 'triangle', 0.09, 105, 0.08);
     },
     mutation(){
       bass(145, 0.34, 0.20, 510);
@@ -195,11 +211,12 @@ const Sound = (() => {
       noise(0.14, 0.045, 6200, 1400, 0.16, 900, true);
     },
     death(){
-      noise(1.0, 0.60, 8500, 45, 0, 25);
-      noise(0.68, 0.25, 1800, 100, 0.02, 80, true);
-      bass(210, 0.92, 0.30, 28);
-      tone(480, 0.76, 'sawtooth', 0.16, 45, 0.02);
-      tone(1260, 0.35, 'square', 0.075, 120, 0.04);
+      sub(35, 1.24, 0.68, 18);
+      bass(74, 1.00, 0.40, 26);
+      tone(178, 0.88, 'sawtooth', 0.18, 38, 0.02);
+      noise(1.14, 0.65, 9500, 42, 0, 24);
+      noise(0.72, 0.28, 2100, 90, 0.02, 70, true);
+      tone(1180, 0.38, 'square', 0.085, 105, 0.04);
     },
     waveStart(){
       bass(98, 0.30, 0.15, 120);
@@ -230,10 +247,14 @@ const Sound = (() => {
 })();
 
 // --------------------------- Input ---------------------------------------
-const keys = { up:false, down:false, fire:false };
+// Direct four-way flight: the arrows apply acceleration, and releasing them
+// lets the ship coast down instead of snapping to a fixed screen position.
+const keys = { left:false, right:false, up:false, down:false, fire:false };
 let fireCooldown = 0;
 function setKey(e, down) {
   switch (e.code) {
+    case 'ArrowLeft': case 'KeyA': keys.left = down; e.preventDefault(); return true;
+    case 'ArrowRight': case 'KeyD': keys.right = down; e.preventDefault(); return true;
     case 'ArrowUp': case 'KeyW': keys.up = down; e.preventDefault(); return true;
     case 'ArrowDown': case 'KeyS': keys.down = down; e.preventDefault(); return true;
     case 'Space': keys.fire = down; e.preventDefault(); return true;
@@ -245,8 +266,6 @@ window.addEventListener('keydown', function (e) {
   if (setKey(e, true)) return;
   if (e.repeat) return;
   switch (e.code) {
-    case 'ArrowLeft': case 'KeyA': reverseShip(-1); break;
-    case 'ArrowRight': case 'KeyD': reverseShip(1); break;
     case 'KeyB': case 'ShiftLeft': case 'ShiftRight': smartBomb(); break;
     case 'KeyH': case 'KeyC': hyperspace(); break;
     case 'KeyP': case 'Escape': togglePause(); break;
@@ -277,7 +296,7 @@ let bannerText = '', bannerSub = '';
 
 try { hi = parseInt(localStorage.getItem('defenderHi') || '0', 10) || 0; } catch(e){}
 
-const ship = { x: WORLD_W * 0.5, y: 0, vx: CRUISE, vy: 0, facing: 1, carrying: null, invuln: 2.0, alive: true, thrust: 0 };
+const ship = { x: WORLD_W * 0.5, y: 0, vx: 0, vy: 0, facing: 1, carrying: null, invuln: 2.0, alive: true, thrust: 0 };
 // World coordinate at the center of the viewport. The camera has a wide
 // dead-zone so the ship can visibly travel across the screen instead of
 // being pinned to an edge or glued to the exact center.
@@ -382,7 +401,7 @@ function spawnWave(n) {
 
 function startNewGame() {
   score = 0; lives = 3; wave = 1; bombs = 3; nextExtra = 15000;
-  ship.x = WORLD_W * 0.5; ship.y = (PLAY_TOP + GROUND_BASE) * 0.4; ship.vx = CRUISE; ship.vy = 0; camX = ship.x;
+  ship.x = WORLD_W * 0.5; ship.y = (PLAY_TOP + GROUND_BASE) * 0.4; ship.vx = 0; ship.vy = 0; camX = ship.x;
   ship.facing = 1; ship.carrying = null; ship.invuln = 2.5; ship.alive = true;
   spawnWave(wave); state = STATE.INTRO; stateTimer = 2.0;
 }
@@ -425,7 +444,7 @@ function hyperspace() {
   if (state !== STATE.PLAY || !ship.alive) return;
   ship.x = Math.random() * WORLD_W; ship.y = rand(PLAY_TOP + 60, GROUND_BASE - 230);
   camX = ship.x;
-  ship.invuln = Math.max(ship.invuln, 1.6); ship.vx = CRUISE * ship.facing; ship.vy = 0;
+  ship.invuln = Math.max(ship.invuln, 1.6); ship.vx = 0; ship.vy = 0;
   explosion(ship.x, ship.y, '#bfefff', 18, 0.8); Sound.hyperspace();
 }
 
@@ -465,12 +484,19 @@ function dropMine(x, y) { mines.push({ x, y, vx: rand(-30, 30), vy: 26, timer: 4
 // --------------------------- Update: ship --------------------------------
 function updateShip(dt) {
   if (!ship.alive) return;
-  ship.vx = approach(ship.vx, ship.facing * CRUISE, REV_ACCEL, dt);
+  // True inertial four-way flight: the arrows add acceleration and releasing
+  // them produces a deliberate coast-down instead of an automatic cruise.
+  if (keys.left) ship.vx -= H_ACCEL * dt;
+  if (keys.right) ship.vx += H_ACCEL * dt;
+  if (!keys.left && !keys.right) ship.vx = approach(ship.vx, 0, H_DAMP, dt);
+  ship.vx = clamp(ship.vx, -H_MAX, H_MAX);
+  if (Math.abs(ship.vx) > 18) ship.facing = ship.vx < 0 ? -1 : 1;
+
   if (keys.up) ship.vy -= V_ACCEL * dt;
   if (keys.down) ship.vy += V_ACCEL * dt;
   if (!keys.up && !keys.down) ship.vy = approach(ship.vy, 0, V_DAMP, dt);
   ship.vy = clamp(ship.vy, -V_MAX, V_MAX);
-  ship.thrust = (keys.up ? 1 : 0) + (keys.down ? 1 : 0);
+  ship.thrust = (keys.left || keys.right ? 1 : 0) + (keys.up || keys.down ? 1 : 0);
   ship.x = wrap(ship.x + ship.vx * dt, WORLD_W);
   ship.y += ship.vy * dt;
   const top = PLAY_TOP + 16;
@@ -712,7 +738,7 @@ function update(dt) {
       } else {
         ship.x = WORLD_W * 0.5; ship.y = (PLAY_TOP + GROUND_BASE) * 0.4;
         camX = ship.x;
-        ship.vx = CRUISE * ship.facing; ship.vy = 0; ship.invuln = 2.6; ship.alive = true;
+        ship.vx = 0; ship.vy = 0; ship.invuln = 2.6; ship.alive = true;
         state = STATE.PLAY;
       }
     }
@@ -1022,8 +1048,8 @@ function drawTitle() {
   drawTextC('an arcade tribute to the 1981 classic', W / 2, cy - 104, 14, '#5fbfd0', 'center', 6);
   ctx.textAlign = 'left';
   const lines = [
-    ['← / →', 'reverse thrust direction  (ship cruises automatically)'],
-    ['↑ / ↓', 'thrust up / down'],
+    ['← / →', 'accelerate left / right  (inertial flight)'],
+    ['↑ / ↓', 'accelerate up / down  (inertial flight)'],
     ['SPACE', 'fire laser'],
     ['B', 'smart bomb  (clears the screen)'],
     ['H', 'hyperspace  (teleport + brief shield)'],
