@@ -146,17 +146,64 @@ const Sound = (() => {
     tone(freq, dur, 'sine', vol, slideTo, delay);
     tone(freq * 1.49, dur * 0.72, 'sine', vol * 0.22, slideTo ? slideTo * 1.49 : null, (delay || 0) + 0.006, 4);
   }
+
+  // Continuous engine/thrust bed shaped from the uploaded thrust reference:
+  // a strong ~120 Hz body, harmonic around 240 Hz, sub shimmer, and filtered
+  // broadband noise. It is driven by the ship's actual velocity and thrust.
+  let engine = null;
+  function startEngine() {
+    if (!ac || !enabled || engine) return;
+    const t0 = ac.currentTime;
+    const bus = ac.createGain(); bus.gain.value = 0.0001;
+    const filter = ac.createBiquadFilter(); filter.type = 'lowpass'; filter.frequency.value = 520; filter.Q.value = 0.9;
+    bus.connect(filter).connect(master);
+    const body = ac.createOscillator(); body.type = 'sawtooth'; body.frequency.value = 116;
+    const harmonic = ac.createOscillator(); harmonic.type = 'triangle'; harmonic.frequency.value = 232;
+    const subbed = ac.createOscillator(); subbed.type = 'sine'; subbed.frequency.value = 38;
+    const n = ac.createBufferSource(); n.buffer = noiseBuf; n.loop = true;
+    const nf = ac.createBiquadFilter(); nf.type = 'bandpass'; nf.frequency.value = 340; nf.Q.value = 0.7;
+    const ng = ac.createGain(); ng.gain.value = 0.13;
+    body.connect(bus); harmonic.connect(bus); subbed.connect(bus);
+    n.connect(nf).connect(ng).connect(bus);
+    body.start(t0); harmonic.start(t0); subbed.start(t0); n.start(t0);
+    engine = { bus, filter, body, harmonic, subbed, n, nf, ng };
+  }
+  function stopEngine() {
+    if (!engine || !ac) return;
+    const e = engine; engine = null; const t = ac.currentTime;
+    e.bus.gain.cancelScheduledValues(t); e.bus.gain.setTargetAtTime(0.0001, t, 0.07);
+    setTimeout(() => { try { e.body.stop(); e.harmonic.stop(); e.subbed.stop(); e.n.stop(); } catch (_) {} }, 300);
+  }
+  function updateEngine(level, vertical) {
+    if (!ac || !enabled) return;
+    level = clamp(level || 0, 0, 1); vertical = clamp(vertical || 0, 0, 1);
+    if (level < 0.012) { stopEngine(); return; }
+    startEngine();
+    if (!engine) return;
+    const t = ac.currentTime, e = engine;
+    e.bus.gain.setTargetAtTime(0.018 + level * 0.15, t, 0.035);
+    e.body.frequency.setTargetAtTime(112 + level * 34 + vertical * 8, t, 0.05);
+    e.harmonic.frequency.setTargetAtTime(224 + level * 68 + vertical * 16, t, 0.05);
+    e.subbed.frequency.setTargetAtTime(35 + level * 10, t, 0.06);
+    e.filter.frequency.setTargetAtTime(300 + level * 520, t, 0.08);
+    e.nf.frequency.setTargetAtTime(260 + level * 260, t, 0.08);
+    e.ng.gain.setTargetAtTime(0.08 + level * 0.15, t, 0.08);
+  }
   return {
     init, resume,
-    setEnabled(v){ enabled = v; if (master) master.gain.value = v ? MASTER_LEVEL : 0; },
+    setEnabled(v){ enabled = v; if (master) master.gain.value = v ? MASTER_LEVEL : 0; if (!v) stopEngine(); },
     isEnabled(){ return enabled; },
+    engine(level, vertical){ updateEngine(level, vertical); },
     laser(){
+      sub(58, 0.13, 0.18, 32);
+      bass(112, 0.11, 0.15, 62, 0.002);
       tone(1650, 0.095, 'square', 0.16, 330, 0, -8);
       tone(2460, 0.055, 'sawtooth', 0.075, 820, 0.004, 5);
       tone(790, 0.11, 'triangle', 0.085, 180, 0.002, 4);
       noise(0.055, 0.11, 7600, 1200, 0, 1800, true);
     },
     enemyShot(){
+      bass(150, 0.20, 0.14, 70);
       tone(430, 0.20, 'sawtooth', 0.15, 82);
       tone(215, 0.24, 'square', 0.075, 54, 0, -8);
       noise(0.10, 0.075, 1900, 180, 0, 120, true);
@@ -233,6 +280,9 @@ const Sound = (() => {
       noise(0.22, 0.05, 7200, 1500, 0.26, 1000, true);
     },
     baiter(){
+      // High-mid warning pair based on the uploaded radar/warning reference.
+      tone(834, 0.20, 'square', 0.14, 1262);
+      tone(1262, 0.20, 'square', 0.12, 834, 0.23);
       bass(126, 0.62, 0.19, 72);
       tone(310, 0.52, 'sawtooth', 0.11, 170, 0.02);
       tone(620, 0.32, 'square', 0.07, 300, 0.08);
@@ -497,6 +547,8 @@ function updateShip(dt) {
   if (!keys.up && !keys.down) ship.vy = approach(ship.vy, 0, V_DAMP, dt);
   ship.vy = clamp(ship.vy, -V_MAX, V_MAX);
   ship.thrust = (keys.left || keys.right ? 1 : 0) + (keys.up || keys.down ? 1 : 0);
+  const engineLevel = clamp(Math.abs(ship.vx) / H_MAX * 0.78 + Math.abs(ship.vy) / V_MAX * 0.72 + ship.thrust * 0.22, 0, 1);
+  Sound.engine(engineLevel, Math.abs(ship.vy) / V_MAX);
   ship.x = wrap(ship.x + ship.vx * dt, WORLD_W);
   ship.y += ship.vy * dt;
   const top = PLAY_TOP + 16;
@@ -694,6 +746,7 @@ function updateParticles(dt) {
 function killPlayer() {
   if (!ship.alive || ship.invuln > 0) return;
   ship.alive = false;
+  Sound.engine(0, 0);
   playerExplosion(ship.x, ship.y);
   Sound.death(); screenShake(16); flash = 0.18; flashColor = '#dfffff';
   if (ship.carrying) { const h = ship.carrying; h.state = 'fall'; h.fallV = -60; h.alive = true; ship.carrying = null; }
@@ -713,7 +766,7 @@ function updateWaveLogic(dt) {
 }
 
 function togglePause() {
-  if (state === STATE.PLAY) state = 'pause';
+  if (state === STATE.PLAY) { state = 'pause'; Sound.engine(0, 0); }
   else if (state === 'pause') state = STATE.PLAY;
 }
 function confirm() {
