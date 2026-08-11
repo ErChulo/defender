@@ -223,18 +223,43 @@ function explosion(x, y, tint, count, power) {
     particles.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: rand(0.2, 0.55), max: 0.55, color: tint, size: rand(1.5, 3) });
   }
 }
+
+// Player death uses the sparse white pixel starburst seen in the arcade
+// reference, rather than the colored fireball used for enemy destruction.
+function playerExplosion(x, y) {
+  const white = ['#ffffff', '#ffffff', '#eaffff', '#c9faff', '#ffffff'];
+  for (let i = 0; i < 84; i++) {
+    const a = Math.random() * TAU;
+    const sp = rand(70, 430) * (chance(0.35) ? 0.62 : 1);
+    particles.push({
+      x: x + rand(-3, 3), y: y + rand(-3, 3),
+      vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+      life: rand(0.42, 1.35), max: 1.35,
+      color: pick(white), size: rand(1.1, 2.8)
+    });
+  }
+  // A few colored sprite fragments remain among the white pixels.
+  for (let i = 0; i < 18; i++) {
+    const a = Math.random() * TAU, sp = rand(90, 330);
+    particles.push({
+      x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+      life: rand(0.3, 0.9), max: 0.9,
+      color: pick(['#f020d0', '#ffb52d', '#ff5a38']), size: rand(1.4, 2.6)
+    });
+  }
+}
 function addFloat(x, y, text, color) { floats.push({ x, y, text, color: color || '#fff', life: 1.0, max: 1.0 }); }
 function screenShake(a) { shake = Math.max(shake, a); }
 
 // Arcade-faithful palette (from reference screenshots)
-const COLORS = { lander:'#9aff2e', mutant:'#ff2a18', bomber:'#ffe020', pod:'#e040e0', swarmer:'#ff9a2a', baiter:'#ff4848' };
+const COLORS = { lander:'#9aff2e', mutant:'#f020d0', bomber:'#ffe020', pod:'#e040e0', swarmer:'#ff9a2a', baiter:'#ff4848' };
 
 function makeEnemy(type, x, y) {
   const e = { type, x, y, vx: 0, vy: 0, hp: 1, r: 15, t: Math.random() * TAU,
               fireTimer: rand(0.8, 2.4), carrying: null, wobble: rand(0, TAU), state: 'roam', target: null, mineTimer: 0 };
   switch (type) {
     case 'lander': e.r = 15; e.speed = 66; break;
-    case 'mutant': e.r = 15; e.speed = 222; e.fireTimer = rand(1.0, 2.0); break;   // fast, aggressive
+    case 'mutant': e.r = 13; e.speed = 222; e.fireTimer = rand(1.0, 2.0); break;   // fast, aggressive alien
     case 'bomber': e.r = 15; e.speed = 104; e.mineTimer = rand(1.5, 3); break;
     case 'pod': e.r = 20; e.speed = 82; break;
     case 'swarmer': e.r = 7; e.speed = 262; break;
@@ -449,7 +474,7 @@ function updateEnemies(dt) {
 
     if (e.type === 'lander' && e.carrying && e.y <= PLAY_TOP + 40) {
       const h = e.carrying; h.alive = false; h.state = 'dead'; e.carrying = null;
-      e.type = 'mutant'; e.speed = 174 + wave * 9; e.fireTimer = rand(0.8, 1.6); e.r = 15;
+      e.type = 'mutant'; e.speed = 174 + wave * 9; e.fireTimer = rand(0.8, 1.6); e.r = 13;
       Sound.mutation(); explosion(e.x, e.y, '#ff2a18', 22, 1.3);
       addFloat(e.x, e.y - 16, 'MUTANT!', '#ff2a18');
     }
@@ -555,8 +580,8 @@ function updateParticles(dt) {
 function killPlayer() {
   if (!ship.alive || ship.invuln > 0) return;
   ship.alive = false;
-  explosion(ship.x, ship.y, '#bfefff', 34, 1.7); explosion(ship.x, ship.y, '#fff', 22, 1.3);
-  Sound.death(); screenShake(16); flash = 0.5; flashColor = '#ff2a18';
+  playerExplosion(ship.x, ship.y);
+  Sound.death(); screenShake(16); flash = 0.18; flashColor = '#dfffff';
   if (ship.carrying) { const h = ship.carrying; h.state = 'fall'; h.fallV = -60; h.alive = true; ship.carrying = null; }
   lives--; state = STATE.DEAD; stateTimer = 1.6;
 }
@@ -721,15 +746,36 @@ function drawEnemy(e) {
     ctx.strokeStyle = col; ctx.beginPath(); ctx.moveTo(-7, 6); ctx.lineTo(-11, 11 + leg); ctx.lineTo(-13, 12); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(7, 6); ctx.lineTo(11, 11 - leg); ctx.lineTo(13, 12); ctx.stroke();
   } else if (e.type === 'mutant') {
-    const ef = e.vx >= 0 ? 1 : -1; ctx.scale(ef, 1);
-    const wf = Math.sin(e.t * 14) * 4;
-    ctx.strokeStyle = col; ctx.fillStyle = '#330604'; ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(0, -11); ctx.lineTo(7, -4); ctx.lineTo(11, 2); ctx.lineTo(6, 9); ctx.lineTo(-6, 9); ctx.lineTo(-11, 2); ctx.lineTo(-7, -4); ctx.closePath();
-    ctx.fill(); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(-7, -2); ctx.lineTo(-15, -8 - wf); ctx.lineTo(-13, 3); ctx.closePath(); ctx.fill(); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(7, -2); ctx.lineTo(15, -8 - wf); ctx.lineTo(13, 3); ctx.closePath(); ctx.fill(); ctx.stroke();
-    ctx.fillStyle = '#ffd0c0'; ctx.fillRect(-4, -3, 3, 3); ctx.fillRect(1, -3, 3, 3);
+    // The arcade mutant is a compact, radial alien — not a bird or a winged ship.
+    // Hard-edged pixel blocks keep the silhouette close to the low-resolution source.
+    const phase = Math.floor(e.t * 10) % 3;
+    const magenta = phase === 1 ? '#ff46df' : '#f020d0';
+    const pink = '#ff9bec';
+    const green = phase === 2 ? '#caff3c' : '#61ff20';
+    const lime = '#eaff55';
+    const orange = '#ffb52d';
+    const p = (px, py, color, pw, ph) => {
+      ctx.fillStyle = color;
+      ctx.fillRect(px, py, pw || 3, ph || 3);
+    };
+    ctx.shadowColor = magenta; ctx.shadowBlur = 6;
+
+    // Dark pixel underlay separates the compact alien from the black field.
+    p(-4, -8, '#190019', 8, 16);
+    p(-8, -4, '#190019', 16, 8);
+
+    // Eight short radial prongs. Their small phase shift is the animation.
+    const twitch = phase === 1 ? 1 : 0;
+    p(-2, -12, green, 4, 3); p(-8, -10, green, 4, 3); p(4, -10, green, 4, 3);
+    p(-13, -5 - twitch, green, 4, 3); p(9, -5 + twitch, green, 4, 3);
+    p(-13, 3 + twitch, green, 4, 3); p(9, 3 - twitch, green, 4, 3);
+    p(-8, 7, green, 4, 3); p(4, 7, green, 4, 3); p(-2, 10, green, 4, 3);
+    p(-9, -7, lime, 3, 3); p(6, -7, lime, 3, 3); p(-9, 4, lime, 3, 3); p(6, 4, lime, 3, 3);
+
+    // Bright magenta core with a hot orange/yellow center.
+    p(-3, -7, magenta, 6, 14); p(-7, -3, magenta, 14, 6);
+    p(-2, -9, pink, 4, 3); p(-2, 6, pink, 4, 3);
+    p(-2, -2, orange, 4, 4); p(-1, -1, '#fff06a', 2, 2);
   } else if (e.type === 'bomber') {
     const ef = e.vx >= 0 ? 1 : -1; ctx.scale(ef, 1);
     ctx.strokeStyle = col; ctx.fillStyle = '#3a3008'; ctx.lineWidth = 2;
