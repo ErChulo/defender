@@ -7,8 +7,9 @@ static web server.
 
 ## Controls
 
-- Left / Right: reverse or flip the ship's facing
-- Up / Down: vertical thrust
+- Left / Right: accelerate horizontally
+- Up / Down: accelerate vertically
+- Release movement keys to coast down
 - Space: fire
 - B or Shift: smart bomb
 - H or C: hyperspace / inviso
